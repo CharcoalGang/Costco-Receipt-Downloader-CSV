@@ -1,0 +1,303 @@
+// ==========================================
+// PART 1: THE FETCHER (Original "Safe" Version)
+// ==========================================
+async function listReceipts(startDate, endDate) {
+    return await new Promise(function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        xhr.responseType = 'json';
+        xhr.open('POST', 'https://ecom-api.costco.com/ebusiness/order/v1/orders/graphql');
+        xhr.setRequestHeader("Access-Control-Allow-Origin", "*");
+        xhr.setRequestHeader('Content-Type', 'application/json-patch+json');
+        xhr.setRequestHeader('Costco.Env', 'ecom');
+        xhr.setRequestHeader('Costco.Service', 'restOrders');
+        xhr.setRequestHeader('Costco-X-Wcs-Clientid', localStorage.getItem('clientID'));
+        xhr.setRequestHeader('Client-Identifier', '481b1aec-aa3b-454b-b81b-48187e28f205');
+        xhr.setRequestHeader('Costco-X-Authorization', 'Bearer ' + localStorage.getItem('idToken'));
+        
+        // REVERTED QUERY: Using the exact fields from your original working file
+        const listReceiptsQuery = {
+            "query": `
+                query receipts($startDate: String!, $endDate: String!) {
+                  receipts(startDate: $startDate, endDate: $endDate) {
+                    warehouseName
+                    documentType
+                    transactionDateTime
+                    transactionDate
+                    companyNumber
+                    warehouseNumber
+                    operatorNumber
+                    transactionNumber
+                    transactionBarcode
+                    total
+                    totalItemCount
+                    subTotal
+                    taxes
+                    itemArray {
+                        itemNumber
+                        itemDescription01
+                        itemDescription02
+                        itemIdentifier
+                        unit
+                        amount
+                        taxFlag
+                    }
+                    tenderArray {
+                        tenderTypeCode
+                        tenderDescription
+                        amountTender
+                    }
+                    instantSavings
+                    membershipNumber
+                  }
+                }`.replace(/\s+/g,' '),
+            "variables": {
+                "startDate": startDate,
+                "endDate": endDate
+            }
+        };
+        xhr.onload = async function() {
+            if (xhr.status === 200) {
+                resolve(xhr.response.data.receipts);
+            } else {
+                console.error("Costco API Error:", xhr.status);
+                reject(xhr.status);
+            }
+        };
+        xhr.send(JSON.stringify(listReceiptsQuery));
+    });
+}
+
+// ==========================================
+// PART 2: THE PROCESSOR
+// ==========================================
+class CostcoReceiptConverter {
+  constructor() {
+    this.csvHeaders = [
+      'order_number', 'receipt_id', 'receipt_type', 'transaction_date', 'warehouse_info', 
+      'item_sku', 'item_name', 'item_actual_name', 'item_description_2', 'item_weight', 
+      'full_item_image', 'quantity', 'unit_price', 'line_total', 'department_id', 
+      'tax_flag', 'isFSAEligible', 'subtotal', 'instant_savings', 'discount_amount', 
+      'shop_card_applied', 'coupon_applied', 'tax_total', 'shipping_handling', 
+      'delivery_fees', 'surcharges', 'surcharge_reason', 'final_total', 
+      'payment_methods', 'raw_receipt_hash'
+    ];
+  }
+
+  formatDate(dateString) {
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      return date.toISOString().split('T')[0];
+    } catch (error) { return ''; }
+  }
+
+  formatWarehouseInfo(warehouseNumber, warehouseName) {
+    if (warehouseName && warehouseNumber) return `${warehouseName} (#${warehouseNumber})`;
+    return warehouseName || `Warehouse #${warehouseNumber}` || 'Unknown';
+  }
+
+  extractWeight(description) {
+    if (!description) return '';
+    const weightMatch = description.match(/(\d+(?:\.\d+)?)\s*(LB|KG|OZ|G|POUND|GRAM)/i);
+    return weightMatch ? `${weightMatch[1]} ${weightMatch[2].toUpperCase()}` : '';
+  }
+
+  getFSAEligibility(identifier) {
+    if (!identifier) return null;
+    const code = identifier.toUpperCase().trim();
+    return code === 'F' || code === 'H';
+  }
+
+  calculateUnitPrice(amount, quantity) {
+    const amt = parseFloat(amount) || 0;
+    const qty = parseFloat(quantity) || 1;
+    return qty > 0 ? (amt / qty) : 0;
+  }
+
+  generateHash(str) {
+    let hash = 0;
+    if (str.length === 0) return hash.toString(16);
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash).toString(16);
+  }
+
+  // LOGIC TO DETECT ADJUSTMENTS
+  isAdjustmentItem(item, previousItems) {
+    if (!item.itemDescription01) return null;
+    const description = item.itemDescription01;
+    
+    // Check for patterns like "/ 12345"
+    const slashPattern = /^\/\s*(\d{5,7})/.exec(description);
+    if (slashPattern) {
+      const referencedItemNumber = slashPattern[1];
+      for (let i = previousItems.length - 1; i >= 0; i--) {
+        if (previousItems[i].itemNumber === referencedItemNumber) {
+          let adjustmentType = item.amount < 0 ? 'instant_savings' : (description.toLowerCase().includes('crv') ? 'crv_tax' : 'surcharge');
+          return {
+            targetIndex: i,
+            adjustmentType: adjustmentType,
+            adjustmentAmount: Math.abs(item.amount || 0),
+            reason: description.replace(`/ ${referencedItemNumber}`, '').trim()
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  parseWarehouseReceipt(receipts) {
+    const rows = [];
+    receipts.forEach((receipt, receiptIndex) => {
+      const items = receipt.itemArray || [];
+      const taxes = receipt.taxes || 0;
+      const tenders = receipt.tenderArray || [];
+      
+      // Handle taxes (sometimes a number, sometimes an object)
+      const taxTotal = (typeof taxes === 'number') ? taxes : 0;
+
+      const paymentMethods = tenders
+        .map(tender => `${tender.tenderDescription || tender.tenderTypeCode}:${tender.amountTender || 0}`)
+        .join(';');
+
+      const warehouseInfo = this.formatWarehouseInfo(receipt.warehouseNumber, receipt.warehouseName);
+      const processedRows = [];
+
+      items.forEach((item, itemIndex) => {
+        // Check for adjustments
+        const adjustmentInfo = this.isAdjustmentItem(item, items.slice(0, itemIndex));
+        if (adjustmentInfo) {
+          if (!processedRows[adjustmentInfo.targetIndex]) processedRows[adjustmentInfo.targetIndex] = { adjustments: [] };
+          else if (!processedRows[adjustmentInfo.targetIndex].adjustments) processedRows[adjustmentInfo.targetIndex].adjustments = [];
+          processedRows[adjustmentInfo.targetIndex].adjustments.push(adjustmentInfo);
+          return;
+        }
+
+        const row = {
+          order_number: receipt.transactionBarcode || receipt.transactionNumber,
+          receipt_id: receipt.transactionNumber,
+          receipt_type: 'warehouse',
+          transaction_date: this.formatDate(receipt.transactionDateTime || receipt.transactionDate),
+          warehouse_info: warehouseInfo,
+          item_sku: item.itemNumber || '',
+          item_name: item.itemDescription01 || '',
+          item_actual_name: '', // Not available in API
+          item_description_2: item.itemDescription02 || '',
+          item_weight: this.extractWeight(item.itemDescription02),
+          full_item_image: '',
+          quantity: item.unit || 1,
+          unit_price: this.calculateUnitPrice(item.amount, item.unit),
+          line_total: item.amount || 0,
+          department_id: '', // Not available in API
+          tax_flag: item.taxFlag || 'N',
+          isFSAEligible: this.getFSAEligibility(item.itemIdentifier),
+          subtotal: receipt.subTotal || 0,
+          instant_savings: 0, 
+          discount_amount: 0,
+          shop_card_applied: 0,
+          coupon_applied: 0,
+          tax_total: taxTotal,
+          shipping_handling: 0,
+          delivery_fees: 0,
+          surcharges: 0,
+          surcharge_reason: '',
+          final_total: receipt.total || 0,
+          payment_methods: paymentMethods,
+          raw_receipt_hash: this.generateHash(JSON.stringify(receipt))
+        };
+        processedRows[itemIndex] = { row: row, adjustments: [] };
+      });
+
+      // Apply Adjustments (combine rows)
+      processedRows.forEach((processedItem) => {
+        if (processedItem && processedItem.row) {
+          let itemInstantSavings = 0;
+          let itemSurcharges = 0;
+          let surchargeReasons = [];
+          
+          if (processedItem.adjustments && processedItem.adjustments.length > 0) {
+            processedItem.adjustments.forEach(adj => {
+              if (adj.adjustmentType === 'instant_savings') itemInstantSavings += adj.adjustmentAmount;
+              else {
+                itemSurcharges += adj.adjustmentAmount;
+                if (adj.reason) surchargeReasons.push(adj.reason);
+              }
+            });
+          }
+          
+          processedItem.row.instant_savings = itemInstantSavings;
+          processedItem.row.surcharges = itemSurcharges;
+          processedItem.row.surcharge_reason = surchargeReasons.join('; ');
+          rows.push(processedItem.row);
+        }
+      });
+    });
+    return rows;
+  }
+
+  arrayToCSV(data) {
+    if (!data || data.length === 0) return this.csvHeaders.join(',');
+    const csvRows = [this.csvHeaders.join(',')];
+    data.forEach(row => {
+      const csvRow = this.csvHeaders.map(header => {
+        let value = row[header];
+        if (value === null || value === undefined) value = '';
+        value = value.toString();
+        if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+          value = `"${value.replace(/"/g, '""')}"`;
+        }
+        return value;
+      });
+      csvRows.push(csvRow.join(','));
+    });
+    return csvRows.join('\n');
+  }
+}
+
+// ==========================================
+// PART 3: THE BRIDGE
+// ==========================================
+async function downloadFullCsv() {
+    
+    /* * ===============================================================
+     * HOW TO CHANGE THE START DATE
+     * ===============================================================
+     * 1. Edit the date inside the quotes below.
+     * 2. Use the format 'Month/Day/Year' (MM/DD/YYYY).
+     * 3. Example: '01/01/2020' will get receipts from Jan 1st, 2020.
+     */
+    var startDateStr = '01/01/2023'; 
+    // ===============================================================
+
+    var endDate = new Date();
+    var endDateStr = endDate.toLocaleDateString('en-US', {year: "numeric", month: "2-digit", day: "2-digit"});
+    
+    console.log("Fetching receipts...");
+    
+    try {
+        var rawReceipts = await listReceipts(startDateStr, endDateStr);
+        console.log(`Fetched ${rawReceipts.length} receipts. Processing...`);
+
+        const converter = new CostcoReceiptConverter();
+        const csvContent = converter.arrayToCSV(converter.parseWarehouseReceipt(rawReceipts));
+
+        var a = document.createElement('a');
+        a.download = `costco-full-export-${endDate.toISOString().split('T')[0]}.csv`
+        a.href = window.URL.createObjectURL(new Blob([csvContent], {type: 'text/csv'}));
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        console.log("Download complete.");
+        
+    } catch (e) {
+        console.error(e);
+        console.log("Error. Please refresh the page and try again.");
+    }
+}
+
+await downloadFullCsv();
+
+

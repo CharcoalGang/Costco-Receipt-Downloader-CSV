@@ -16,29 +16,18 @@ A JavaScript snippet that fetches your Costco order history and converts it into
 3. **Open Console:**
    * **Windows:** Press `F12` or right-click anywhere on the page and select **Inspect**, then click the **Console** tab.
    * **Mac:** Press `Command + Option + J` (Chrome) or `Command + Option + C` (Safari).
-4. **Enable Pasting:** * Attempt to paste the code. If your browser blocks it and shows a warning (e.g., "Warning: Don't paste code..."), type `allow pasting` and press **Enter**.
+4. **Enable Pasting:** Attempt to paste the code. If your browser blocks it and shows a warning (e.g., "Warning: Don't paste code..."), type `allow pasting` and press **Enter**.
    * *Note:* This is a standard browser security feature.
 5. **Run:** Copy the entire script, paste it into the console, and press **Enter**.
-6. **Download:** The script will fetch your history and automatically trigger a `.csv` download.
+6. **Select Dates:** A popup window will appear asking for your **Start Date** and **End Date**. Enter them in `MM/DD/YYYY` format.
+7. **Download:** The script will fetch your history and automatically trigger a `.csv` download.
 
 ## Configuration
 
-### Changing the Date Range
-By default, the script pulls receipts starting from **January 1, 2023**. To change this:
+### Changing Default Dates
+The script is interactive and will ask you for dates every time you run it. However, if you want to change the **pre-filled default dates** (so you don't have to type them every time):
 
 1. Scroll to the bottom of the script to the `downloadFullCsv` function.
-2. Find the line: `var startDateStr = '01/01/2023';`
-3. Update the date using the `MM/DD/YYYY` format.
-
-## Credits & Attribution
-This script is a mix of existing tools and AI generation. I am not a programmer, but I used **Google Gemini** to merge different codebases into this working solution.
-
-* **Original Logic:** The fetching logic is based on the work by [Ankur Dave](https://github.com/ankurdave/beancount_import_sources/blob/main/download/download_costco_receipts.js).
-* **Code Refinement:** Updated and merged with detailed CSV processing logic using Gemini.
-
-## Disclaimer & Maintenance
-**Please Note:** I have no programming knowledge. This repository was created simply to share a solution that worked for me at the time.
-
-* **This project will not be actively maintained.**
-* If Costco changes their website structure or API, this script may stop working.
-* I cannot provide technical support, bug fixes, or feature updates.
+2. Find the lines:
+   ```javascript
+   var defaultStart = '01/01/2023';

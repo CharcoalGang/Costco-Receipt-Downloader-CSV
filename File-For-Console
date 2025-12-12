@@ -14,7 +14,6 @@ async function listReceipts(startDate, endDate) {
         xhr.setRequestHeader('Client-Identifier', '481b1aec-aa3b-454b-b81b-48187e28f205');
         xhr.setRequestHeader('Costco-X-Authorization', 'Bearer ' + localStorage.getItem('idToken'));
         
-        // REVERTED QUERY: Using the exact fields from your original working file
         const listReceiptsQuery = {
             "query": `
                 query receipts($startDate: String!, $endDate: String!) {
@@ -125,12 +124,9 @@ class CostcoReceiptConverter {
     return Math.abs(hash).toString(16);
   }
 
-  // LOGIC TO DETECT ADJUSTMENTS
   isAdjustmentItem(item, previousItems) {
     if (!item.itemDescription01) return null;
     const description = item.itemDescription01;
-    
-    // Check for patterns like "/ 12345"
     const slashPattern = /^\/\s*(\d{5,7})/.exec(description);
     if (slashPattern) {
       const referencedItemNumber = slashPattern[1];
@@ -155,19 +151,12 @@ class CostcoReceiptConverter {
       const items = receipt.itemArray || [];
       const taxes = receipt.taxes || 0;
       const tenders = receipt.tenderArray || [];
-      
-      // Handle taxes (sometimes a number, sometimes an object)
       const taxTotal = (typeof taxes === 'number') ? taxes : 0;
-
-      const paymentMethods = tenders
-        .map(tender => `${tender.tenderDescription || tender.tenderTypeCode}:${tender.amountTender || 0}`)
-        .join(';');
-
+      const paymentMethods = tenders.map(tender => `${tender.tenderDescription || tender.tenderTypeCode}:${tender.amountTender || 0}`).join(';');
       const warehouseInfo = this.formatWarehouseInfo(receipt.warehouseNumber, receipt.warehouseName);
       const processedRows = [];
 
       items.forEach((item, itemIndex) => {
-        // Check for adjustments
         const adjustmentInfo = this.isAdjustmentItem(item, items.slice(0, itemIndex));
         if (adjustmentInfo) {
           if (!processedRows[adjustmentInfo.targetIndex]) processedRows[adjustmentInfo.targetIndex] = { adjustments: [] };
@@ -184,14 +173,14 @@ class CostcoReceiptConverter {
           warehouse_info: warehouseInfo,
           item_sku: item.itemNumber || '',
           item_name: item.itemDescription01 || '',
-          item_actual_name: '', // Not available in API
+          item_actual_name: '',
           item_description_2: item.itemDescription02 || '',
           item_weight: this.extractWeight(item.itemDescription02),
           full_item_image: '',
           quantity: item.unit || 1,
           unit_price: this.calculateUnitPrice(item.amount, item.unit),
           line_total: item.amount || 0,
-          department_id: '', // Not available in API
+          department_id: '',
           tax_flag: item.taxFlag || 'N',
           isFSAEligible: this.getFSAEligibility(item.itemIdentifier),
           subtotal: receipt.subTotal || 0,
@@ -211,13 +200,11 @@ class CostcoReceiptConverter {
         processedRows[itemIndex] = { row: row, adjustments: [] };
       });
 
-      // Apply Adjustments (combine rows)
       processedRows.forEach((processedItem) => {
         if (processedItem && processedItem.row) {
           let itemInstantSavings = 0;
           let itemSurcharges = 0;
           let surchargeReasons = [];
-          
           if (processedItem.adjustments && processedItem.adjustments.length > 0) {
             processedItem.adjustments.forEach(adj => {
               if (adj.adjustmentType === 'instant_savings') itemInstantSavings += adj.adjustmentAmount;
@@ -227,7 +214,6 @@ class CostcoReceiptConverter {
               }
             });
           }
-          
           processedItem.row.instant_savings = itemInstantSavings;
           processedItem.row.surcharges = itemSurcharges;
           processedItem.row.surcharge_reason = surchargeReasons.join('; ');
@@ -258,24 +244,30 @@ class CostcoReceiptConverter {
 }
 
 // ==========================================
-// PART 3: THE BRIDGE
+// PART 3: THE BRIDGE (Updated with Popups)
 // ==========================================
 async function downloadFullCsv() {
     
-    /* * ===============================================================
-     * HOW TO CHANGE THE START DATE
-     * ===============================================================
-     * 1. Edit the date inside the quotes below.
-     * 2. Use the format 'Month/Day/Year' (MM/DD/YYYY).
-     * 3. Example: '01/01/2020' will get receipts from Jan 1st, 2020.
-     */
-    var startDateStr = '01/01/2023'; 
-    // ===============================================================
+    // Calculate Today's Date for default values
+    var today = new Date();
+    var defaultEnd = today.toLocaleDateString('en-US', {year: "numeric", month: "2-digit", day: "2-digit"});
+    var defaultStart = '01/01/2023';
 
-    var endDate = new Date();
-    var endDateStr = endDate.toLocaleDateString('en-US', {year: "numeric", month: "2-digit", day: "2-digit"});
+    // 1. Ask user for Start Date
+    var startDateStr = prompt("Enter Start Date (MM/DD/YYYY):", defaultStart);
+    if (!startDateStr) {
+        console.log("Cancelled by user.");
+        return; 
+    }
+
+    // 2. Ask user for End Date
+    var endDateStr = prompt("Enter End Date (MM/DD/YYYY):", defaultEnd);
+    if (!endDateStr) {
+        console.log("Cancelled by user.");
+        return;
+    }
     
-    console.log("Fetching receipts...");
+    console.log(`Fetching receipts from ${startDateStr} to ${endDateStr}...`);
     
     try {
         var rawReceipts = await listReceipts(startDateStr, endDateStr);
@@ -285,7 +277,7 @@ async function downloadFullCsv() {
         const csvContent = converter.arrayToCSV(converter.parseWarehouseReceipt(rawReceipts));
 
         var a = document.createElement('a');
-        a.download = `costco-full-export-${endDate.toISOString().split('T')[0]}.csv`
+        a.download = `costco-export-${startDateStr.replace(/\//g,'-')}-to-${endDateStr.replace(/\//g,'-')}.csv`
         a.href = window.URL.createObjectURL(new Blob([csvContent], {type: 'text/csv'}));
         a.target = '_blank';
         document.body.appendChild(a);
@@ -299,5 +291,3 @@ async function downloadFullCsv() {
 }
 
 await downloadFullCsv();
-
-

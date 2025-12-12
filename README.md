@@ -16,8 +16,10 @@ A JavaScript snippet that fetches your Costco order history and converts it into
 3. **Open Console:**
    * **Windows:** Press `F12` or right-click anywhere on the page and select **Inspect**, then click the **Console** tab.
    * **Mac:** Press `Command + Option + J` (Chrome) or `Command + Option + C` (Safari).
-4. **Run:** Copy the entire script, paste it into the console, and press **Enter**.
-5. **Download:** The script will fetch your history and automatically trigger a `.csv` download.
+4. **Enable Pasting:** * Attempt to paste the code. If your browser blocks it and shows a warning (e.g., "Warning: Don't paste code..."), type `allow pasting` and press **Enter**.
+   * *Note:* This is a standard browser security feature.
+5. **Run:** Copy the entire script, paste it into the console, and press **Enter**.
+6. **Download:** The script will fetch your history and automatically trigger a `.csv` download.
 
 ## Configuration
 

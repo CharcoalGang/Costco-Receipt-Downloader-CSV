@@ -1,4 +1,4 @@
-# Costco Receipt CSV Fetcher
+# Costco Receipt Downloader CSV
 
 A JavaScript snippet that fetches your Costco order history and converts it into a detailed CSV format suitable for spreadsheets (Excel, Google Sheets).
 
